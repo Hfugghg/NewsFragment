@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">NewsFragment</string>
+    <!-- TODO: Remove or change this placeholder text -->
+    <string name="hello_blank_fragment">Hello blank fragment</string>
+    <string name="search_hint">请输入搜索关键词</string>
+    <string name="search">搜索</string>
+    <string name="detailed_search">详细搜索</string>
+    <string name="detailed_search_button">详细搜索</string>
+    <string name="enable_detailed_search">启用详细搜索</string>
+    <string name="search_results">搜索结果</string>
+    <string name="no_search_results">未找到相关内容</string>
+    <string name="detailed_search_explanation">详细搜索将会在新闻的标题、摘要和正文中查找您输入的关键词，可能会返回更多结果，但搜索时间也会更长。</string>
+</resources>
