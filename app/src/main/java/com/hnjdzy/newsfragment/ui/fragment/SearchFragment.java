@@ -31,8 +31,9 @@ import com.hnjdzy.newsfragment.model.NewsType;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -49,10 +50,16 @@ public class SearchFragment extends Fragment {
     private List<News> searchResultList = new ArrayList<>();
     private CheckBox checkBoxDetailedSearch;
     private Button buttonSearchDetailed;
-    private TextView textViewNoResults; // 用于显示未找到相关内容
+    private TextView textViewNoResults;
 
     private OkHttpClient client;
     private Gson gson;
+
+    private AtomicInteger processedCount = new AtomicInteger(0);
+    private AtomicInteger totalCount = new AtomicInteger(0);
+
+    // Declare SharedPreferences at the class level
+    private SharedPreferences sharedPreferences;
 
     @Nullable
     @Override
@@ -63,10 +70,14 @@ public class SearchFragment extends Fragment {
         recyclerViewSearchResults = view.findViewById(R.id.recyclerViewSearchResults);
         checkBoxDetailedSearch = view.findViewById(R.id.checkBoxDetailedSearch);
         buttonSearchDetailed = view.findViewById(R.id.buttonSearchDetailed);
-        textViewNoResults = view.findViewById(R.id.textViewNoResults); // 初始化未找到结果的 TextView
+        textViewNoResults = view.findViewById(R.id.textViewNoResults);
 
         recyclerViewSearchResults.setLayoutManager(new LinearLayoutManager(getContext()));
-        SharedPreferences sharedPreferences = requireContext().getSharedPreferences("news_read_status", Context.MODE_PRIVATE);
+
+        // Initialize sharedPreferences here
+        sharedPreferences = requireContext().getSharedPreferences("news_read_status", Context.MODE_PRIVATE);
+
+        // Pass the sharedPreferences instance to the adapter
         searchResultsAdapter = new NewsAdapter(searchResultList, sharedPreferences, requireContext());
         recyclerViewSearchResults.setAdapter(searchResultsAdapter);
 
@@ -85,24 +96,51 @@ public class SearchFragment extends Fragment {
 
         buttonSearchDetailed.setOnClickListener(v -> performDetailedSearch());
 
-        // 点击“详细搜索”文字弹出解释
         TextView textViewDetailedSearchExplanation = view.findViewById(R.id.textViewDetailedSearchExplanation);
         textViewDetailedSearchExplanation.setOnClickListener(v -> showDetailedSearchExplanation());
 
-        // 初始状态隐藏未找到结果的 TextView
         textViewNoResults.setVisibility(View.GONE);
 
         return view;
     }
 
+    // Add onResume to refresh the adapter when the fragment comes back to the foreground
+    @Override
+    public void onResume() {
+        super.onResume();
+        // When the SearchFragment resumes, refresh the adapter to reflect any read status changes
+        if (searchResultsAdapter != null) {
+            searchResultsAdapter.notifyDataSetChanged();
+        }
+    }
+
     private void showNoResultsMessage() {
         recyclerViewSearchResults.setVisibility(View.GONE);
         textViewNoResults.setVisibility(View.VISIBLE);
+        textViewNoResults.setText("未找到相关内容");
     }
 
     private void hideNoResultsMessage() {
         recyclerViewSearchResults.setVisibility(View.VISIBLE);
         textViewNoResults.setVisibility(View.GONE);
+    }
+
+    private void updateProgressDisplay() {
+        if (getActivity() != null) {
+            getActivity().runOnUiThread(() -> {
+                int current = processedCount.get();
+                int total = totalCount.get();
+                if (total > 0) {
+                    textViewNoResults.setText("正在查找... (" + current + "/" + total + ")");
+                    textViewNoResults.setVisibility(View.VISIBLE);
+                    recyclerViewSearchResults.setVisibility(View.GONE);
+                } else {
+                    textViewNoResults.setText("正在查找...");
+                    textViewNoResults.setVisibility(View.VISIBLE);
+                    recyclerViewSearchResults.setVisibility(View.GONE);
+                }
+            });
+        }
     }
 
     private void performSimpleSearch() {
@@ -112,9 +150,13 @@ public class SearchFragment extends Fragment {
             return;
         }
         searchResultList.clear();
+        // Make sure the adapter is refreshed here
         searchResultsAdapter.notifyDataSetChanged();
-        hideNoResultsMessage(); // 搜索前隐藏未找到结果的提示
-        fetchNewsTypesAndSearch(keyword, false); // 执行普通搜索
+        processedCount.set(0);
+        totalCount.set(0);
+        textViewNoResults.setText("");
+        updateProgressDisplay();
+        fetchNewsTypesAndSearch(keyword, false);
     }
 
     private void performDetailedSearch() {
@@ -124,9 +166,13 @@ public class SearchFragment extends Fragment {
             return;
         }
         searchResultList.clear();
+        // Make sure the adapter is refreshed here
         searchResultsAdapter.notifyDataSetChanged();
-        hideNoResultsMessage(); // 搜索前隐藏未找到结果的提示
-        fetchNewsTypesAndSearch(keyword, true); // 执行详细搜索
+        processedCount.set(0);
+        totalCount.set(0);
+        textViewNoResults.setText("");
+        updateProgressDisplay();
+        fetchNewsTypesAndSearch(keyword, true);
     }
 
     private void fetchNewsTypesAndSearch(String keyword, boolean isDetailed) {
@@ -137,7 +183,10 @@ public class SearchFragment extends Fragment {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 if (getActivity() != null) {
-                    getActivity().runOnUiThread(() -> android.widget.Toast.makeText(getContext(), "获取新闻分类失败", android.widget.Toast.LENGTH_SHORT).show());
+                    getActivity().runOnUiThread(() -> {
+                        android.widget.Toast.makeText(getContext(), "获取新闻分类失败", android.widget.Toast.LENGTH_SHORT).show();
+                        showNoResultsMessage();
+                    });
                     Log.e("SearchFragment", "获取新闻分类失败: " + e.getMessage());
                 }
             }
@@ -147,165 +196,225 @@ public class SearchFragment extends Fragment {
                 if (response.isSuccessful() && response.body() != null) {
                     String responseData = response.body().string();
                     List<NewsType> newsTypeList = gson.fromJson(responseData, new TypeToken<List<NewsType>>() {}.getType());
-                    if (newsTypeList != null) {
-                        AtomicBoolean foundResults = new AtomicBoolean(false);
+                    if (newsTypeList != null && !newsTypeList.isEmpty()) {
+                        totalCount.set(newsTypeList.size());
+                        updateProgressDisplay();
+
+                        CountDownLatch latch = new CountDownLatch(newsTypeList.size());
+
                         for (NewsType newsType : newsTypeList) {
                             if (isDetailed) {
-                                if (fetchNewsListAndDetailsAndFilter(newsType.getTid(), keyword)) {
-                                    foundResults.set(true);
-                                }
+                                fetchNewsListAndDetailsAndFilter(newsType.getTid(), keyword, latch);
                             } else {
-                                if (fetchNewsListAndFilter(newsType.getTid(), keyword)) {
-                                    foundResults.set(true);
-                                }
+                                fetchNewsListAndFilter(newsType.getTid(), keyword, latch);
                             }
                         }
-                        if (getActivity() != null) {
-                            getActivity().runOnUiThread(() -> {
-                                if (!foundResults.get() && searchResultList.isEmpty()) {
-                                    showNoResultsMessage();
+
+                        new Thread(() -> {
+                            try {
+                                latch.await();
+                                if (getActivity() != null) {
+                                    getActivity().runOnUiThread(() -> {
+                                        if (searchResultList.isEmpty()) {
+                                            showNoResultsMessage();
+                                        } else {
+                                            hideNoResultsMessage();
+                                            // After all searches are complete, refresh the adapter to ensure read status is correct
+                                            searchResultsAdapter.notifyDataSetChanged();
+                                        }
+                                    });
                                 }
-                            });
-                        }
+                            } catch (InterruptedException e) {
+                                Log.e("SearchFragment", "CountDownLatch await interrupted: " + e.getMessage());
+                                if (getActivity() != null) {
+                                    getActivity().runOnUiThread(() -> {
+                                        showNoResultsMessage();
+                                    });
+                                }
+                            }
+                        }).start();
+
                     } else {
                         if (getActivity() != null) {
-                            getActivity().runOnUiThread(() -> android.widget.Toast.makeText(getContext(), "获取新闻分类数据失败", android.widget.Toast.LENGTH_SHORT).show());
-                            Log.e("SearchFragment", "获取新闻分类数据失败: " + response);
+                            getActivity().runOnUiThread(() -> {
+                                android.widget.Toast.makeText(getContext(), "获取新闻分类数据失败或为空", android.widget.Toast.LENGTH_SHORT).show();
+                                showNoResultsMessage();
+                            });
+                            Log.e("SearchFragment", "获取新闻分类数据失败或为空: " + responseData);
                         }
+                    }
+                } else {
+                    if (getActivity() != null) {
+                        getActivity().runOnUiThread(() -> {
+                            android.widget.Toast.makeText(getContext(), "获取新闻分类响应失败", android.widget.Toast.LENGTH_SHORT).show();
+                            showNoResultsMessage();
+                        });
+                        Log.e("SearchFragment", "获取新闻分类响应失败: " + response);
                     }
                 }
             }
         });
     }
 
-    private boolean fetchNewsListAndFilter(int tid, String keyword) {
+    private void fetchNewsListAndFilter(int tid, String keyword, CountDownLatch latch) {
         String newsListUrl = "http://182.42.154.48:8088/news/servlet/ApiServlet?opr=newslist&tid=" + tid;
         Request request = new Request.Builder().url(newsListUrl).build();
-        AtomicBoolean resultsFound = new AtomicBoolean(false);
 
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 Log.e("SearchFragment", "获取新闻列表失败 (tid=" + tid + "): " + e.getMessage());
+                processedCount.incrementAndGet();
+                updateProgressDisplay();
+                latch.countDown();
             }
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful() && response.body() != null) {
-                    String responseData = response.body().string();
-                    List<News> newsList = gson.fromJson(responseData, new TypeToken<List<News>>() {}.getType());
-                    if (newsList != null) {
-                        List<News> filteredList = new ArrayList<>();
-                        for (News news : newsList) {
-                            if ((news.getNtitle() != null && news.getNtitle().contains(keyword)) ||
-                                    (news.getNsummary() != null && news.getNsummary().contains(keyword))) {
-                                filteredList.add(news);
-                                resultsFound.set(true);
-                            }
-                        }
-                        if (getActivity() != null) {
-                            getActivity().runOnUiThread(() -> {
-                                searchResultList.addAll(filteredList);
-                                searchResultsAdapter.notifyDataSetChanged();
-                                if (!searchResultList.isEmpty()) {
-                                    hideNoResultsMessage();
+                try {
+                    if (response.isSuccessful() && response.body() != null) {
+                        String responseData = response.body().string();
+                        List<News> newsList = gson.fromJson(responseData, new TypeToken<List<News>>() {}.getType());
+                        if (newsList != null) {
+                            List<News> filteredList = new ArrayList<>();
+                            for (News news : newsList) {
+                                if ((news.getNtitle() != null && news.getNtitle().contains(keyword)) ||
+                                        (news.getNsummary() != null && news.getNsummary().contains(keyword))) {
+                                    // You need to check the read status of the news item here
+                                    // The adapter's onBindViewHolder will handle this when notifyDataSetChanged() is called
+                                    filteredList.add(news);
                                 }
-                            });
+                            }
+                            if (getActivity() != null) {
+                                getActivity().runOnUiThread(() -> {
+                                    if (!filteredList.isEmpty()) {
+                                        searchResultList.addAll(filteredList);
+                                        // No need to call notifyDataSetChanged here, it will be called once all requests are done
+                                    }
+                                });
+                            }
+                        } else {
+                            Log.e("SearchFragment", "获取新闻列表数据失败 (tid=" + tid + "): " + response);
                         }
-                    } else {
-                        Log.e("SearchFragment", "获取新闻列表数据失败 (tid=" + tid + "): " + response);
                     }
+                } finally {
+                    processedCount.incrementAndGet();
+                    updateProgressDisplay();
+                    latch.countDown();
                 }
             }
         });
-        return resultsFound.get();
     }
 
-    private boolean fetchNewsListAndDetailsAndFilter(int tid, String keyword) {
+    private void fetchNewsListAndDetailsAndFilter(int tid, String keyword, CountDownLatch parentLatch) {
         String newsListUrl = "http://182.42.154.48:8088/news/servlet/ApiServlet?opr=newslist&tid=" + tid;
         Request request = new Request.Builder().url(newsListUrl).build();
-        AtomicBoolean resultsFound = new AtomicBoolean(false);
 
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 Log.e("SearchFragment", "获取新闻列表失败 (详细搜索, tid=" + tid + "): " + e.getMessage());
+                processedCount.incrementAndGet();
+                updateProgressDisplay();
+                parentLatch.countDown();
             }
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful() && response.body() != null) {
-                    String responseData = response.body().string();
-                    List<News> newsList = gson.fromJson(responseData, new TypeToken<List<News>>() {}.getType());
-                    if (newsList != null) {
-                        for (News news : newsList) {
-                            if (fetchNewsDetailsAndFilter(news.getNid(), keyword)) {
-                                resultsFound.set(true);
+                try {
+                    if (response.isSuccessful() && response.body() != null) {
+                        String responseData = response.body().string();
+                        List<News> newsList = gson.fromJson(responseData, new TypeToken<List<News>>() {}.getType());
+                        if (newsList != null && !newsList.isEmpty()) {
+                            CountDownLatch childLatch = new CountDownLatch(newsList.size());
+                            for (News news : newsList) {
+                                fetchNewsDetailsAndFilter(news.getNid(), keyword, childLatch);
                             }
+
+                            new Thread(() -> {
+                                try {
+                                    childLatch.await();
+                                } catch (InterruptedException e) {
+                                    Log.e("SearchFragment", "Child CountDownLatch await interrupted: " + e.getMessage());
+                                } finally {
+                                    parentLatch.countDown();
+                                }
+                            }).start();
+
+                        } else {
+                            Log.e("SearchFragment", "获取新闻列表数据失败 (详细搜索, tid=" + tid + "): " + response);
+                            processedCount.incrementAndGet();
+                            updateProgressDisplay();
+                            parentLatch.countDown();
                         }
                     } else {
-                        Log.e("SearchFragment", "获取新闻列表数据失败 (详细搜索, tid=" + tid + "): " + response);
+                        Log.e("SearchFragment", "获取新闻列表响应失败 (详细搜索, tid=" + tid + "): " + response);
+                        processedCount.incrementAndGet();
+                        updateProgressDisplay();
+                        parentLatch.countDown();
                     }
+                } finally {
+                    // Handled by parentLatch.countDown()
                 }
             }
         });
-        return resultsFound.get();
     }
 
-    private boolean fetchNewsDetailsAndFilter(int nid, String keyword) {
+    private void fetchNewsDetailsAndFilter(int nid, String keyword, CountDownLatch latch) {
         String newsDetailsUrl = "http://182.42.154.48:8088/news/servlet/ApiServlet?opr=readnews&nid=" + nid;
         Request request = new Request.Builder().url(newsDetailsUrl).build();
-        AtomicBoolean resultFound = new AtomicBoolean(false);
 
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 Log.e("SearchFragment", "获取新闻详情失败 (nid=" + nid + "): " + e.getMessage());
+                latch.countDown();
             }
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful() && response.body() != null) {
-                    String responseData = response.body().string();
-                    NewsDetail newsDetail = gson.fromJson(responseData, NewsDetail.class);
-                    if (newsDetail != null) {
-                        if ((newsDetail.getNtitle() != null && newsDetail.getNtitle().contains(keyword)) ||
-                                (newsDetail.getNsummary() != null && newsDetail.getNsummary().contains(keyword)) ||
-                                (newsDetail.getNcontent() != null && newsDetail.getNcontent().contains(keyword))) {
-                            if (getActivity() != null) {
-                                getActivity().runOnUiThread(() -> {
-                                    boolean alreadyExists = false;
-                                    for (News existingNews : searchResultList) {
-                                        if (existingNews.getNid() == newsDetail.getNid()) {
-                                            alreadyExists = true;
-                                            break;
+                try {
+                    if (response.isSuccessful() && response.body() != null) {
+                        String responseData = response.body().string();
+                        NewsDetail newsDetail = gson.fromJson(responseData, NewsDetail.class);
+                        if (newsDetail != null) {
+                            if ((newsDetail.getNtitle() != null && newsDetail.getNtitle().contains(keyword)) ||
+                                    (newsDetail.getNsummary() != null && newsDetail.getNsummary().contains(keyword)) ||
+                                    (newsDetail.getNcontent() != null && newsDetail.getNcontent().contains(keyword))) {
+                                if (getActivity() != null) {
+                                    getActivity().runOnUiThread(() -> {
+                                        boolean alreadyExists = false;
+                                        for (News existingNews : searchResultList) {
+                                            if (existingNews.getNid() == newsDetail.getNid()) {
+                                                alreadyExists = true;
+                                                break;
+                                            }
                                         }
-                                    }
-                                    if (!alreadyExists) {
-                                        News newsItem = new News();
-                                        newsItem.setNid(newsDetail.getNid());
-                                        newsItem.setNtitle(newsDetail.getNtitle());
-                                        newsItem.setNauthor(newsDetail.getNauthor());
-                                        newsItem.setNcreatedate(newsDetail.getNcreatedate());
-                                        newsItem.setNpicpath(newsDetail.getNpicpath());
-                                        newsItem.setNsummary(newsDetail.getNsummary());
-                                        newsItem.setNtid(newsDetail.getNtid());
-                                        newsItem.setNtname(newsDetail.getNtname());
-                                        searchResultList.add(newsItem);
-                                        searchResultsAdapter.notifyDataSetChanged();
-                                        hideNoResultsMessage();
-                                        resultFound.set(true);
-                                    }
-                                });
+                                        if (!alreadyExists) {
+                                            News newsItem = new News();
+                                            newsItem.setNid(newsDetail.getNid());
+                                            newsItem.setNtitle(newsDetail.getNtitle());
+                                            newsItem.setNauthor(newsDetail.getNauthor());
+                                            newsItem.setNcreatedate(newsDetail.getNcreatedate());
+                                            newsItem.setNpicpath(newsDetail.getNpicpath());
+                                            newsItem.setNsummary(newsDetail.getNsummary());
+                                            newsItem.setNtid(newsDetail.getNtid());
+                                            newsItem.setNtname(newsDetail.getNtname());
+                                            searchResultList.add(newsItem);
+                                            // No need to call notifyDataSetChanged here, it will be called once all requests are done
+                                        }
+                                    });
+                                }
                             }
+                        } else {
+                            Log.e("SearchFragment", "获取新闻详情数据失败 (nid=" + nid + "): " + response);
                         }
-                    } else {
-                        Log.e("SearchFragment", "获取新闻详情数据失败 (nid=" + nid + "): " + response);
                     }
+                } finally {
+                    latch.countDown();
                 }
             }
         });
-        return resultFound.get();
     }
 
     private void showDetailedSearchExplanation() {
