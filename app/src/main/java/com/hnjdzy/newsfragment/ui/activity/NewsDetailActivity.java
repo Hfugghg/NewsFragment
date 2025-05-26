@@ -4,11 +4,16 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.MenuItem;
+import android.widget.ImageButton;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+
 import com.alibaba.fastjson.JSON;
+import com.hnjdzy.newsfragment.Dao.LikeDao;
 import com.hnjdzy.newsfragment.R;
 import com.hnjdzy.newsfragment.model.NewsDetail;
 
@@ -31,6 +36,12 @@ public class NewsDetailActivity extends AppCompatActivity {
     private final OkHttpClient okHttpClient = new OkHttpClient(); // OkHttpClient 实例，用于发送网络请求
     private final Handler mainHandler = new Handler(Looper.getMainLooper()); // 主线程Handler，用于更新UI
     private int nid; // 新闻ID
+    private LikeDao likeDao;
+    private int currentNewsId = -1; // 存储当前新闻的ID
+
+    private ImageButton btnLike; // 点赞按钮
+    private TextView tvLikeCount; // 点赞数量显示
+    private LinearLayout llLikeSection;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -43,6 +54,13 @@ public class NewsDetailActivity extends AppCompatActivity {
         tvDetailDate = findViewById(R.id.tv_detail_date);
         tvDetailContent = findViewById(R.id.tv_detail_content);
 
+        btnLike = findViewById(R.id.btn_like);
+        tvLikeCount = findViewById(R.id.tv_like_count);
+        llLikeSection = findViewById(R.id.ll_like_section);
+
+        likeDao = new LikeDao(this);
+        likeDao.open();
+
         // 启用 ActionBar 的返回按钮
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
@@ -50,13 +68,87 @@ public class NewsDetailActivity extends AppCompatActivity {
 
         // 获取传递过来的新闻ID (nid)
         nid = getIntent().getIntExtra("nid", -1);
+        currentNewsId = nid; // 存储当前新闻的ID
+
         if (nid != -1) {
             // 如果成功获取到nid，则请求新闻详情
             fetchNewsDetail(nid);
+
+            updateLikeStatus(); // 更新点赞状态
         } else {
             // 如果未能获取到nid，则显示提示并关闭当前Activity
             Toast.makeText(this, "未能获取新闻ID", Toast.LENGTH_SHORT).show();
             finish();
+        }
+
+        btnLike.setOnClickListener(v -> toggleLike());
+    }
+
+    // 重写 onResume() 和 onPause() 方法来管理数据库连接
+    @Override
+    protected void onResume() {
+        super.onResume();
+//        if (likeDao != null) {
+//            likeDao.open(); // 在 Activity resume 时打开数据库
+//        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (likeDao != null) {
+            likeDao.close(); // 在 Activity pause 时关闭数据库
+        }
+    }
+
+    // 处理 ActionBar 的返回按钮点击事件
+    private void updateLikeStatus() {
+        if (currentNewsId != -1) {
+            // 从数据库获取当前新闻的点赞数量
+            int count = likeDao.getLikeCount(currentNewsId);
+            // 更新点赞数量 TextView
+            tvLikeCount.setText(String.valueOf(count));
+
+            // 根据点赞数量来判断是否已点赞，并设置图标
+            // 这里的逻辑是：如果点赞数大于0，就认为用户已点赞，显示填充图标；否则显示空心图标
+            if (count > 0) {
+                btnLike.setImageResource(R.drawable.ic_thumb_up_filled);
+            } else {
+                btnLike.setImageResource(R.drawable.ic_thumb_up);
+            }
+        }
+    }
+
+    // 点赞/取消点赞
+    private void toggleLike() {
+        if (currentNewsId != -1) {
+            // 获取当前新闻的点赞数量
+            int currentCount = likeDao.getLikeCount(currentNewsId);
+            int newCount;
+
+            // 简单的点赞/取消点赞逻辑：
+            // 如果当前点赞数为0，点击则执行点赞操作，点赞数+1；
+            // 否则（点赞数>0），点击则执行取消点赞操作，点赞数-1。
+            if (currentCount == 0) {
+                newCount = likeDao.incrementLikeCount(currentNewsId);
+            } else {
+                newCount = likeDao.decrementLikeCount(currentNewsId);
+            }
+
+            // 判断操作是否成功
+            if (newCount != -1) {
+                // 操作成功，更新 UI
+                tvLikeCount.setText(String.valueOf(newCount));
+                // 根据新的点赞数量更新图标
+                if (newCount > 0) {
+                    btnLike.setImageResource(R.drawable.ic_thumb_up_filled);
+                } else {
+                    btnLike.setImageResource(R.drawable.ic_thumb_up);
+                }
+            } else {
+                // 操作失败，可以显示一个Toast提示用户
+                Toast.makeText(this, "点赞操作失败", Toast.LENGTH_SHORT).show();
+            }
         }
     }
 
