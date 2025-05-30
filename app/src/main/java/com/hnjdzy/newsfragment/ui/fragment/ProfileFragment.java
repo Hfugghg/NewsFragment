@@ -1,66 +1,105 @@
 package com.hnjdzy.newsfragment.ui.fragment;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Bundle;
-
-import androidx.fragment.app.Fragment;
-
+import android.text.InputType;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.RelativeLayout;
+import android.widget.Toast;
 
-import com.hnjdzy.newsfragment.R;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
+import androidx.fragment.app.Fragment;
 
-/**
- * A simple {@link Fragment} subclass.
- * Use the {@link ProfileFragment#newInstance} factory method to
- * create an instance of this fragment.
- */
+import com.hnjdzy.newsfragment.R; // 确保R文件路径正确
+
 public class ProfileFragment extends Fragment {
 
-    // TODO: Rename parameter arguments, choose names that match
-    // the fragment initialization parameters, e.g. ARG_ITEM_NUMBER
-    private static final String ARG_PARAM1 = "param1";
-    private static final String ARG_PARAM2 = "param2";
+    private static final String PREFS_NAME = "NewsAppPrefs";
+    private static final String API_KEY_KEY = "api_key";
 
-    // TODO: Rename and change types of parameters
-    private String mParam1;
-    private String mParam2;
+    private RelativeLayout itemApiSettings;
 
     public ProfileFragment() {
         // Required empty public constructor
     }
 
     /**
-     * Use this factory method to create a new instance of
-     * this fragment using the provided parameters.
+     * 从SharedPreferences获取API密钥
      *
-     * @param param1 Parameter 1.
-     * @param param2 Parameter 2.
-     * @return A new instance of fragment ProfileFragment.
+     * @return 存储的API密钥，如果不存在则返回空字符串
      */
-    // TODO: Rename and change types and number of parameters
-    public static ProfileFragment newInstance(String param1, String param2) {
-        ProfileFragment fragment = new ProfileFragment();
-        Bundle args = new Bundle();
-        args.putString(ARG_PARAM1, param1);
-        args.putString(ARG_PARAM2, param2);
-        fragment.setArguments(args);
-        return fragment;
-    }
-
-    @Override
-    public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        if (getArguments() != null) {
-            mParam1 = getArguments().getString(ARG_PARAM1);
-            mParam2 = getArguments().getString(ARG_PARAM2);
-        }
+    public static String getApiKey(Context context) {
+        SharedPreferences sharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return sharedPreferences.getString(API_KEY_KEY, "");
     }
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container,
                              Bundle savedInstanceState) {
         // Inflate the layout for this fragment
-        return inflater.inflate(R.layout.fragment_profile, container, false);
+        View view = inflater.inflate(R.layout.fragment_profile, container, false);
+
+        // 查找布局中的API设置项
+        itemApiSettings = view.findViewById(R.id.item_api_settings);
+
+        // 设置API设置项的点击事件
+        itemApiSettings.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showApiSettingsDialog();
+            }
+        });
+
+        return view;
+    }
+
+    /**
+     * 显示API密钥设置对话框
+     */
+    private void showApiSettingsDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(requireContext());
+        builder.setTitle("设置 API 密钥");
+
+        // 设置一个EditText用于输入API密钥
+        final EditText input = new EditText(requireContext());
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        input.setHint("请输入DeepSeek API密钥");
+
+        // 从SharedPreferences中读取当前存储的API密钥，并显示在EditText中
+        SharedPreferences sharedPreferences = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String currentApiKey = sharedPreferences.getString(API_KEY_KEY, "");
+        input.setText(currentApiKey);
+
+        builder.setView(input);
+
+        // 设置“保存”按钮
+        builder.setPositiveButton("保存", (dialog, which) -> {
+            String newApiKey = input.getText().toString().trim();
+            saveApiKey(newApiKey);
+            Toast.makeText(requireContext(), "API 密钥已保存", Toast.LENGTH_SHORT).show();
+        });
+
+        // 设置“取消”按钮
+        builder.setNegativeButton("取消", (dialog, which) -> dialog.cancel());
+
+        builder.show();
+    }
+
+    /**
+     * 保存API密钥到SharedPreferences
+     *
+     * @param apiKey 要保存的API密钥
+     */
+    private void saveApiKey(String apiKey) {
+        SharedPreferences sharedPreferences = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putString(API_KEY_KEY, apiKey);
+        editor.apply(); // 使用apply()异步保存，提高性能
     }
 }
