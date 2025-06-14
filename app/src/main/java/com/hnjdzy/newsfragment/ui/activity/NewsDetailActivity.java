@@ -255,13 +255,13 @@ public class NewsDetailActivity extends AppCompatActivity {
             jsonBody.put("model", "deepseek-chat");
             JSONArray messages = new JSONArray();
 
-            // System prompt
+            // 系统提示
             JSONObject systemMessage = new JSONObject();
             systemMessage.put("role", "system");
             systemMessage.put("content", "你是一个专业的翻译助手。请将用户提供的新闻标题和内容翻译成地道的英文，保留原文的格式和分段。请直接返回翻译后的文本，不要添加任何额外信息或解释。");
             messages.put(systemMessage);
 
-            // User prompt
+            // 用户消息
             JSONObject userMessage = new JSONObject();
             userMessage.put("role", "user");
             userMessage.put("content", "请翻译以下新闻：\n\n标题：" + title + "\n\n内容：" + content);
